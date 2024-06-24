@@ -1,0 +1,96 @@
+# README: Create image pull secrect for your container registry in namespace kube-public before you deploy the daemonset!
+# It's important to make sure the certificates are added in the right order. 
+# For example: <.leaf.crt>, <intermediate.crt>, <root.crt>.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: leaf
+  namespace: kube-public
+data:
+  leaf.crt: |+
+    -----BEGIN CERTIFICATE-----
+
+    -----END CERTIFICATE-----
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: intermediate
+  namespace: kube-public
+data:
+  intermediate.crt: |+
+    -----BEGIN CERTIFICATE-----
+
+    -----END CERTIFICATE-----
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: root
+  namespace: kube-public
+data:
+  root.crt: |+
+    -----BEGIN CERTIFICATE-----
+    
+    -----END CERTIFICATE-----
+---
+
+kind: DaemonSet
+apiVersion: apps/v1
+metadata:
+  labels:
+    app: cert-installer-windows
+  name: cert-installer-windows
+  namespace: kube-public
+spec:
+  selector:
+    matchLabels:
+      name: cert-installer-windows
+  template:
+    metadata:
+      labels:
+        name: cert-installer-windows
+    spec:
+      securityContext:
+        windowsOptions:
+          hostProcess: true
+          runAsUserName: "NT AUTHORITY\\SYSTEM"
+      hostNetwork: true
+      imagePullSecrets:
+      - name: pullsecret
+      containers:
+        - image: mcr.microsoft.com/dotnet/sdk:7.0-windowsservercore-ltsc2019
+          name: windows
+          command: ["Powershell"] # Wait a week after execute, couldn't make it work with a pause image. Container will restart weekly. Modify 'Start-Sleep -Seconds 604800' if you want to change this.
+          args: ["$env:CA_LEAF > cert1.cer;$cert=New-Object -TypeName System.Security.Cryptography.X509Certificates.X509Certificate2 -ErrorAction Stop;$cert.Import('cert1.cer');$store=New-Object -TypeName System.Security.Cryptography.X509Certificates.X509Store -ArgumentList Root, LocalMachine -ErrorAction Stop;$store.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite);$store.Add($cert);$store.Close();$env:CA_INTERMEDIATE > cert2.cer;$cert=New-Object -TypeName System.Security.Cryptography.X509Certificates.X509Certificate2 -ErrorAction Stop;$cert.Import('cert2.cer');$store=New-Object -TypeName System.Security.Cryptography.X509Certificates.X509Store -ArgumentList Root, LocalMachine -ErrorAction Stop;$store.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite);$store.Add($cert);$store.Close();$env:CA_ROOT > cert3.cer;$cert=New-Object -TypeName System.Security.Cryptography.X509Certificates.X509Certificate2 -ErrorAction Stop;$cert.Import('cert3.cer');$store=New-Object -TypeName System.Security.Cryptography.X509Certificates.X509Store -ArgumentList Root, LocalMachine -ErrorAction Stop;$store.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite);$store.Add($cert);$store.Close();Write-Output 'done - start sleep a week';Start-Sleep -Seconds 604800"]
+          env:
+          - name: CA_LEAF
+            valueFrom:
+              configMapKeyRef:
+                name: leaf
+                key: leaf.crt
+          - name: CA_INTERMEDIATE
+            valueFrom:
+              configMapKeyRef:
+                name: intermediate
+                key: intermediate.crt
+          - name: CA_ROOT
+            valueFrom:
+              configMapKeyRef:
+                name: root
+                key: root.crt
+          volumeMounts:
+            - name: certsdir
+              mountPath: /mycerts
+      nodeSelector:
+        "kubernetes.io/os": windows
+      tolerations: # remove NoSchedule toleration if you don't set a NoSchedule taint on the nodes
+        - key: node.kubernetes.io/os
+          operator: Equal
+          value: Windows
+          effect: NoSchedule
+      volumes:
+        - name: certsdir
+          hostPath:
+            # directory location on host
+            path: /windows

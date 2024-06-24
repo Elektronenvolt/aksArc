@@ -1,0 +1,72 @@
+# README: Create image pull secrect for your container registry in namespace kube-public before you deploy the daemonset!
+# create single file with certifcates in order: cat [leaf].crt  [intermediate].crt [Root].crt >  [your single cert file].crt  
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: trusted-ca
+  namespace: kube-public
+data:
+  ca.crt: |+
+    -----BEGIN CERTIFICATE-----
+    <CERT in PEM format>
+    -----END CERTIFICATE-----
+    -----BEGIN CERTIFICATE-----
+    <CERT in PEM format>
+    -----END CERTIFICATE-----
+    # Replace section above with your certificates - they should be specified in a single .crt file in PEM format.
+    # It's important to make sure the certificates are added in the right order in a single .crt file. 
+    # For example: <.leaf.crt>, <intermediate.crt>, <root.crt>.
+    # cat [leaf].crt [intermediate].crt [Root].crt > [your single cert file].crt
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: setup-script
+  namespace: kube-public
+data:
+  setup.sh: |
+    echo "$TRUSTED_CERT" > /etc/pki/ca-trust/source/anchors/ca.crt && update-ca-trust && systemctl restart containerd
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  namespace: kube-public
+  name: node-custom-setup
+  labels:
+    k8s-app: node-custom-setup
+spec:
+  selector:
+    matchLabels:
+      k8s-app: node-custom-setup
+  template:
+    metadata:
+      labels:
+        k8s-app: node-custom-setup
+    spec:
+      hostPID: true
+      hostNetwork: true
+      imagePullSecrets:
+      - name: pullsecret
+      initContainers:
+      - name: init-node
+        command: ["nsenter"]
+        args: ["--mount=/proc/1/ns/mnt", "--", "sh", "-c", "$(SETUP_SCRIPT)"]
+        image: debian
+        env:
+        - name: TRUSTED_CERT
+          valueFrom:
+            configMapKeyRef:
+              name: trusted-ca
+              key: ca.crt
+        - name: SETUP_SCRIPT
+          valueFrom:
+            configMapKeyRef:
+              name: setup-script
+              key: setup.sh
+        securityContext:
+          privileged: true
+      containers:
+      - name: wait
+        image: registry.k8s.io/pause:3.2
+      nodeSelector:
+        "kubernetes.io/os": linux

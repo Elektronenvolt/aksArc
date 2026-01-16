@@ -25,7 +25,7 @@ metadata:
   namespace: kube-public
 data:
   setup.sh: |
-    echo "$TRUSTED_CERT" > /etc/pki/ca-trust/source/anchors/ca.crt && update-ca-trust && systemctl restart containerd
+    echo "$TRUSTED_CERT" > /etc/pki/ca-trust/source/anchors/ca.crt && update-ca-trust
 ---
 apiVersion: apps/v1
 kind: DaemonSet
@@ -51,7 +51,7 @@ spec:
       - name: init-node
         command: ["nsenter"]
         args: ["--mount=/proc/1/ns/mnt", "--", "sh", "-c", "$(SETUP_SCRIPT)"]
-        image: debian
+        image: debian:stable-20260112
         env:
         - name: TRUSTED_CERT
           valueFrom:
@@ -65,8 +65,14 @@ spec:
               key: setup.sh
         securityContext:
           privileged: true
+      - name: restart-containerd
+        command: ["nsenter"]
+        args: ["--mount=/proc/1/ns/mnt", "--", "sh", "-c", "systemctl restart containerd; sleep 2; exit 0"]
+        image: debain:stable-20260112
+        securityContext:
+          privileged: true
       containers:
       - name: wait
-        image: registry.k8s.io/pause:3.2
+        image: registry.k8s.io/pause:3.5
       nodeSelector:
         "kubernetes.io/os": linux
